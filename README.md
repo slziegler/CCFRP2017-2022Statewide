@@ -27,8 +27,8 @@
    - SI Figure 2.png
 
 4. Tables 
-   - Table1_ModelSelection.png
-   - Table2_ModelOutput2.png
-   - SI Table 1_FullModelSelection.png
-   - SI Table 2_ModelOutput1.png
-   - SI Table 3_ModelOutput3.png
+   - Table 1.pdf
+   - Table 2.pdf
+   - SI Table 1.pdf
+   - SI Table 2.pdf
+   - SI Table 3.pdf
