@@ -1,0 +1,513 @@
+---
+title: "CCFRP 2017-2022 Statewide Network Analysis"
+author: "Shelby Ziegler"
+date: "5/2/2022"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+##This markdown file includes CCFRP analyses for Biomass Per Unit Effort (BPUE) data.
+
+This code was developed for CCFRP by Shelby Ziegler (shelbylziegler@gmail.com) for the CCFRP 2017-2022 Statewide Network Analysis. Analyses with data collected between 2017-2022 are included in the manuscript. 
+
+Raw data was converted from ACCESS flat files to derived data tables using 'CCFRP_RawtoDerivedConversionCode.Rmd' at https://github.com/ccfrp/CCFRP-Raw-to-Derived-Conversion-Code
+
+Load necessary packages, create alpha level, x~y formula for plotting and set plot theme. 
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, error=FALSE)
+
+rm(list = ls());graphics.off()
+library(tidyverse) # For data manipulation and summarization
+library(plotrix) #To use standard error calculation
+library(cowplot) #For grouping plots
+library(scales) #For editing axis scales
+library(vegan) #For multivariate analyses
+library(rstatix) #For running ANCOVA
+library(ggpmisc) #adding equation and r2 to figures
+
+alpha=0.05
+formula<-y~x
+theme_set(theme_classic(base_size=16))
+```
+
+Load in files for BPUE, mpa reserve characteristics, and landings data
+```{r}
+#Load in data files
+bpue<-read.csv('2022 Data/BPUE-per-IDcell-CCFRP-2022.csv')
+mpadata<-read.csv('Raw_Data 2021/mpa-data-2021.csv')%>%
+  rename(port_complex=PortComplex)
+splands<-read.csv('Raw_Data 2021/CPFVlandings-2017-2019.csv')
+
+#Change South Cape Mendocino to Cape Mendocino for analysis.
+bpue <- transform(bpue,
+          Area=plyr::revalue(Area,c("South Cape Mendocino"="Cape Mendocino")))
+
+#Calculate landings for species groups of interest
+splands<-splands%>%
+  group_by(port_complex, year)%>%
+  summarize(sumlands=sum(landings_n))%>%
+  group_by(port_complex)%>%
+  summarize(landings=mean(sumlands))
+
+#Join reserve characteristics and landings data
+mpadata<-left_join(mpadata, splands, by="port_complex")
+
+#Select the relevant columns for analysis
+mpainfo<-mpadata%>%
+  select(MPA.Group, Region, island.mainland, Pairedsmr.smca, Area_km2, Cluster, Cluster.Area_km2, Paired.latitude, Nearest.Port, Distance.km, Implemented, OffshoreRock_km, Hard_30.100m_km2, landings, anglers_n)%>%
+  rename(Area = MPA.Group )
+
+#Gather BPUE data into long format
+bpue<-bpue%>%
+  group_by(Area, Site, Year)%>%
+  gather(species, bpue,-ID.Cell.per.Trip,  -Area, -Site, -Year, -Total.Angler.Hours, -Grid.Cell.ID)
+
+
+
+#Combine Blue and Deacon Rockfish into one group. These species are combined into a complex for management purposes and were not separate species until 2015. 
+bpue$species <- recode_factor(bpue$species, Blue.Rockfish = "Blue.Deacon.Rockfish", 
+                                Deacon.Rockfish = "Blue.Deacon.Rockfish")
+
+#Match the MPA characteristics to BPUE data. 
+bpuematch<-left_join(bpue, mpainfo, by = 'Area')
+
+```
+
+Total fish BPUE for the statewide dataset (2017-2021)
+
+```{r}
+#For statewide analysis filter out data prior to 2017, filter total fish bpue, and remove sites that were not sampled in all years. 
+#Then calculate mean bpue and 95% CI for all species (totalbpue), sites and years - >2017. 
+bpue2<-bpuematch%>%
+  group_by(Area, Site, Year, species, Region, Area_km2, Cluster, Cluster.Area_km2, Paired.latitude,Nearest.Port, Distance.km, Implemented, OffshoreRock_km, Hard_30.100m_km2, landings, anglers_n)%>%
+  filter(Year>=2017)%>%
+  filter(species == "Total")%>%
+  filter(Area=="Cape Mendocino" | Area=="Ten Mile" | 
+           Area=="Stewarts Point"| 
+           Area == "Bodega Head"| Area=="Ano Nuevo"| Area=="Point Lobos"| 
+           Area=="Piedras Blancas" | Area == 'Point Buchon'|
+           Area=="Carrington Point"| 
+           Area=="Anacapa Island"| Area=="Swamis"|Area=="South La Jolla")%>%
+  summarize(meanbpue=mean(bpue), sebpue=std.error(bpue),
+             lower = mean(bpue) - qt(1- alpha/2, (n() - 1))*sd(bpue)/sqrt(n()),
+                       upper = mean(bpue) + qt(1- alpha/2, (n() - 1))*sd(bpue)/sqrt(n()))
+
+#Reorder MPAs from North to South
+bpue2$Area<-factor(bpue2$Area, levels=c("Cape Mendocino", "Ten Mile", "Stewarts Point", "Bodega Head", "Ano Nuevo", "Point Lobos", "Piedras Blancas", "Point Buchon", "Carrington Point", "Anacapa Island", "Swamis", "South La Jolla"))
+
+#Plot BPUE all sites with a facet
+ggplot(bpue2, aes(x=(Year-Implemented), y=meanbpue, fill=Site)) + 
+  geom_point(shape=21,size=3)+
+  geom_line(aes(color=Site))+
+  scale_fill_manual(values=c("#b2182b", "#2166ac"), "Site")+
+  #geom_smooth(method='lm', se=FALSE, aes(color=Site))+
+  scale_color_manual(values=c("#b2182b", "#2166ac"))+
+  geom_errorbar(aes(ymax=upper, ymin=lower),
+                 width=0)+
+  labs(y=expression(BPUE~(kg~angler~hr^{-1})), x=Years~since~implementation)+
+  facet_wrap(~Area, ncol=4, scales="free")+
+  theme(plot.title = element_text(size = 16, face = "bold"))+
+    theme(panel.border = element_rect(colour = "black", fill=NA, size=1))+
+  theme(axis.text.x = element_text(angle = 45, hjust=1))
+
+#Run ancova for each MPA (Area) to examine BPUE by MPA Status (Site) and Year
+shapiro.test(sqrt(bpue2$meanbpue)) # data not normal, p<0.001
+qplot(sqrt(bpue2$meanbpue))
+qqnorm(sqrt(bpue2$meanbpue))
+qqline(sqrt(bpue2$meanbpue))
+
+av1<-aov(sqrt(meanbpue) ~ Area*Site+Error(Year), data=bpue2)
+summary(av1)
+av2<-aov(sqrt(meanbpue) ~ Area*Site, data=bpue2)
+
+lmtest::bptest(av2)
+
+ancovbpueALL<-bpue2%>%
+  group_by(Area)%>%
+  anova_test((sqrt(meanbpue)) ~ (Year-Implemented)*Site)
+
+bpuematch1<-bpuematch%>%
+filter(Year>=2017)%>%
+  filter(species == "Total")%>%
+  filter(Area=="Cape Mendocino" | Area=="Ten Mile" | 
+           Area=="Stewarts Point"| 
+           Area == "Bodega Head"| Area=="Ano Nuevo"| Area=="Point Lobos"| 
+           Area=="Piedras Blancas" | Area == 'Point Buchon'|
+           Area=="Carrington Point"| 
+           Area=="Anacapa Island"| Area=="Swamis"|Area=="South La Jolla")
+
+
+#Check data for normality and homegeneity
+bpuematch1$sqrtbpue<-sqrt(bpuematch1$bpue)
+#bpuematch1$arcs<-MASS::boxcox(bpuematch1$bpue)
+asum<-bpuematch1 %>%
+  group_by(Area, Site, Year) %>%
+  shapiro_test(sqrtbpue)
+shapiro.test(bpuematch1$sqrtbpue)
+qplot(bpuematch1$sqrtbpue)
+qqnorm(bpuematch1$sqrtbpue)
+qqline(bpuematch1$sqrtbpue)
+
+#### UGHHHHHH ### 
+av1<-aov(sqrt(bpue) ~ Area*Site+Error(Year), data=bpuematch1)
+
+av1pk <- proj(av1) 
+avresid<-av1pk[[3]][, "Residuals"]
+qqnorm(avresid, main="Normal Q-Q") # A quantile normal plot - good for checking normality
+
+qqline(avresid)
+shapiro.test(avresid)
+lmtest::bptest(av1)
+
+#Data are still not normal and non homogenous after transformation and therefore use a Scheirer Ray Hare Test
+
+summary(av1)
+av2<-aov(sqrtbpue ~ Area*Site, data=bpuematch1)
+lmtest::bptest(av2)
+TEST<-rcompanion::scheirerRayHare(meanbpue ~ Area*Site, data=bpue2)
+
+FSA::dunnTest(meanbpue ~ Area,
+              data=bpue2,
+              method="bh")
+
+FSA::dunnTest(meanbpue ~ Site,
+              data=bpue2,
+              method="bh")
+
+summary(TEST)
+res.fried <- bpuematch1 %>% rstatix::friedman_test(bpue ~ Area*Year| Year)
+
+#Run function to plot BPUE for all MPAs individually.
+bpueall<-function(parameter, dt){
+  
+p<-(ggplot(dt[dt$Area==parameter,], aes(x=Year, y=meanbpue, fill=Site)) + 
+  geom_point(shape=21,size=3, alpha=0.5)+
+  geom_line(aes(color=Site))+
+  scale_fill_manual(values=c("#b2182b", "#2166ac"), "Site")+
+  #geom_smooth(method='lm', se=FALSE, aes(color=Site))+
+  scale_color_manual(values=c("#b2182b", "#2166ac"))+
+  ylab('BPUE')+
+  geom_errorbar(aes(ymax=upper, ymin=lower),
+                 width=0)+
+    ylab('BPUE (kg anglers hr-1)')+
+  ggtitle(paste0(parameter))+
+  facet_wrap(~species, ncol=2, scales="free")+
+  theme(plot.title = element_text(size = 16, face = "bold")))+
+    theme(panel.border = element_rect(colour = "black", fill=NA, size=1))
+
+return(p)
+}
+
+#Save plotting function for specific dataset
+ccplot_list <-lapply(unique(bpue2$Area), bpueall, dt=bpue2)
+#Run plotting unction 
+#ccplot_list
+```
+
+Geographic variation in fish species 
+
+```{r}
+bpuegeo<-bpuematch%>%
+  filter(Area=="Cape Mendocino" | Area=="Ten Mile" | 
+           Area=="Stewarts Point"| 
+           Area == "Bodega Head"| Area=="Ano Nuevo"| Area=="Point Lobos"| 
+           Area=="Piedras Blancas" | Area == 'Point Buchon'|
+           Area=="Carrington Point"| 
+           Area=="Anacapa Island"| Area=="Swamis"|Area=="South La Jolla")%>%
+  filter(Year>=2017)%>%
+  group_by(ID.Cell.per.Trip, Area, Site, species)%>%
+  filter(species=="Blue.Deacon.Rockfish" | species=="Gopher.Rockfish"| species=="Copper.Rockfish"|species=="Lingcod"| species=="Olive.Rockfish" |species=="Vermilion.Rockfish" | species=="Yellowtail.Rockfish" | species=="Cabezon" | species=="Ocean.Whitefish" | species=="Kelp.Rockfish")%>%
+  summarize(bpue=sum(bpue))%>%
+  group_by(Area, Site, species)%>%
+   summarize(meanbpue=mean(bpue), sebpue=std.error(bpue),
+             lower = mean(bpue) - qt(1- alpha/2, (n() - 1))*sd(bpue)/sqrt(n()),
+                       upper = mean(bpue) + qt(1- alpha/2, (n() - 1))*sd(bpue)/sqrt(n()))
+
+
+bpuegeo$Area<-factor(bpuegeo$Area, levels=c("South La Jolla", "Swamis", "Anacapa Island","Carrington Point","Point Buchon", "Piedras Blancas", "Point Lobos","Ano Nuevo", "Bodega Head",  "Stewarts Point",  "Ten Mile", "Cape Mendocino"))
+
+bpuegeo$Site<-factor(bpuegeo$Site, levels=c("REF", "MPA"))
+
+ggplot(bpuegeo, aes(y= meanbpue, x=Area, fill=Site))+
+  geom_bar(stat="identity", position=position_dodge(0.9), color="black")+
+  geom_errorbar(aes(ymax=upper, ymin=lower), width=0, position=position_dodge(0.9))+
+  scale_fill_manual(values=c("#2166ac","#b2182b"), "Site")+
+  facet_wrap(~species, scales="free_x", ncol=5)+
+  coord_flip()+
+  labs(y=expression(BPUE~(kg~angler~hr^{-1})), x=" ")+
+  theme(plot.title = element_text(size = 16, face = "bold"))+
+    theme(panel.border = element_rect(colour = "black", fill=NA, size=1))
+
+bpueX<-bpuematch%>%
+ filter(Year>=2017)%>%
+  filter(species == "Total")%>%
+  filter(Area=="Cape Mendocino" | Area=="Ten Mile" | 
+           Area=="Stewarts Point"| 
+           Area == "Bodega Head"| Area=="Ano Nuevo"| Area=="Point Lobos"| 
+           Area=="Piedras Blancas" | Area == 'Point Buchon'|
+           Area=="Carrington Point"| 
+           Area=="Anacapa Island"| Area=="Swamis"|Area=="South La Jolla")%>%
+  group_by(Site)%>%
+  summarize(meanbpue=mean(bpue), sebpue=std.error(bpue),
+             lower = mean(bpue) - qt(1- alpha/2, (n() - 1))*sd(bpue)/sqrt(n()),
+                       upper = mean(bpue) + qt(1- alpha/2, (n() - 1))*sd(bpue)/sqrt(n()))
+
+ 
+bpuegeo1a<-bpuematch%>%
+  group_by(Area, Site)%>%
+  filter(Year>=2017)%>%
+  filter(species == "Total")%>%
+  filter(Area=="Cape Mendocino" | Area=="Ten Mile" | 
+           Area=="Stewarts Point"| 
+           Area == "Bodega Head"| Area=="Ano Nuevo"| Area=="Point Lobos"| 
+           Area=="Piedras Blancas" | Area == 'Point Buchon'|
+           Area=="Carrington Point"| 
+           Area=="Anacapa Island"| Area=="Swamis"|Area=="South La Jolla")
+
+##HERE asumptions for normality not met. 
+summary(aov(bpue~Area*Site+Error(Year), data=bpuegeo1a))
+
+bpuegeo2<-bpuegeo1a%>%
+  summarize(meanbpue=mean(bpue), sebpue=std.error(bpue),
+             lower = mean(bpue) - qt(1- alpha/2, (n() - 1))*sd(bpue)/sqrt(n()),
+                       upper = mean(bpue) + qt(1- alpha/2, (n() - 1))*sd(bpue)/sqrt(n()))
+
+  
+bpuegeo2$Area<-factor(bpuegeo2$Area, levels=c("South La Jolla", "Swamis", "Anacapa Island","Carrington Point","Point Buchon", "Piedras Blancas", "Point Lobos","Ano Nuevo", "Bodega Head",  "Stewarts Point",  "Ten Mile", "Cape Mendocino"))
+
+bpuegeo2$Site<-factor(bpuegeo2$Site, levels=c("REF", "MPA"))
+
+ggplot(bpuegeo2, aes(y= meanbpue, x=Area, fill=Site))+
+  geom_bar(stat="identity", position=position_dodge(0.9), color="black")+
+  geom_errorbar(aes(ymax=upper, ymin=lower), width=0, position=position_dodge(0.9))+
+  scale_fill_manual(values=c("#2166ac","#b2182b"), "Site")+
+  #facet_wrap(~species, scales="free_x", ncol=2)+
+  coord_flip()+
+  labs(y=expression(BPUE~(kg~angler~hr^{-1})), x=" ")+
+  theme(plot.title = element_text(size = 16, face = "bold"))+
+    theme(panel.border = element_rect(colour = "black", fill=NA, size=1))+
+  theme(legend.position="none")
+
+```
+
+Calculate BPUE response ratios for total BPUE for each site and year
+
+```{r}
+totalrrs<-bpue2[,-c(18:20)]
+totalrrs<-totalrrs%>%
+  spread(Site, meanbpue)
+
+totalrrs<-totalrrs[complete.cases(totalrrs),]
+
+totalrrs$RR=log(totalrrs$MPA/totalrrs$REF)
+
+totalrrs$Age<-(totalrrs$Year-totalrrs$Implemented)
+
+
+#Calculate mean response ratios
+totalrrs1<-totalrrs%>%
+  group_by(Area,Area_km2, Cluster, Cluster.Area_km2, Paired.latitude,Nearest.Port, Distance.km,  OffshoreRock_km, Hard_30.100m_km2, landings)%>%
+  summarise(meanRR=mean(RR), seRR=std.error(RR),
+            lower = mean(RR) - qt(1- alpha/2, (n() - 1))*sd(RR)/sqrt(n()),
+                       upper = mean(RR) + qt(1- alpha/2, (n() - 1))*sd(RR)/sqrt(n()),)
+```
+
+Visualize BPUE response ratios with reserve characteristics
+
+```{r}
+##Plot response ratios by latitude
+lat<-ggplot(totalrrs1, aes(x=Paired.latitude, y=meanRR)) + 
+  #geom_line()+
+  scale_shape_manual(values=c(21,23))+
+  #scale_fill_manual(values=c("#b2182b", "#2166ac"), "Site")+
+  geom_smooth(method='lm', color="black",  linetype="dashed", fill="Gray80")+
+  #scale_color_manual(values=c("#b2182b", "#2166ac"))+
+  ylab('BPUE')+
+  geom_hline(yintercept=0)+  
+  geom_point(data=totalrrs, aes(x=Paired.latitude, y=RR), size=2, color="Gray40")+
+   geom_errorbar(aes(ymax=upper, ymin=lower),width=0)+
+  geom_point(aes(shape=Cluster, fill=Area),size=3)+
+  scale_fill_manual(values=c("#000000","#053061","#2166ac", "#4393c3","#92c5de","#d1e5f0", "#f7f7f7","#fddbc7","#f4a582","#d6604d", "#b2182b", "#67001f"), "MPA")+
+  guides(fill=guide_legend(override.aes=list(shape=21)))+
+   stat_poly_eq(aes(label = paste(..eq.label.., ..rr.label.., sep = "~~~")), 
+               label.x.npc = "right", label.y.npc = "top",
+               formula = formula, parse = TRUE, size = 4)+
+  theme(plot.title = element_text(size = 16, face = "bold"))+
+    theme(panel.border = element_rect(colour = "black", fill=NA, size=1))+
+  labs(y=expression(Log~('BPUE'[MPA]~'/'~'BPUE'[REF])), x="Latitude")+theme(legend.position="none")
+
+
+#Plot response ratios by amount of protected area 
+tarea<-ggplot(totalrrs1, aes(x=Cluster.Area_km2, y=meanRR)) + 
+  #geom_line()+
+  scale_shape_manual(values=c(21,23))+
+  #scale_fill_manual(values=c("#b2182b", "#2166ac"), "Site")+
+  geom_smooth(method='lm', color="black",  fill="Gray80")+
+  #scale_color_manual(values=c("#b2182b", "#2166ac"))+
+  ylab('BPUE')+
+  geom_hline(yintercept=0, linetype="dashed")+  
+
+ # facet_wrap(~Area, ncol=4)+
+  theme(plot.title = element_text(size = 16, face = "bold"))+
+    theme(panel.border = element_rect(colour = "black", fill=NA, size=1))+
+  geom_point(data=totalrrs, aes(x=Cluster.Area_km2, y=RR), size=2, color="Gray40")+
+   geom_errorbar(aes(ymax=upper, ymin=lower),width=0)+
+  geom_point(aes(shape=Cluster, fill=Area),size=3)+
+  scale_fill_manual(values=c("#000000","#053061","#2166ac", "#4393c3","#92c5de","#d1e5f0", "#f7f7f7","#fddbc7","#f4a582","#d6604d", "#b2182b", "#67001f"), "MPA")+
+  guides(fill=guide_legend(override.aes=list(shape=21)))+
+   stat_poly_eq(aes(label = paste(..eq.label.., ..rr.label.., sep = "~~~")), 
+               label.x.npc = "left", label.y.npc = "top",
+               formula = formula, parse = TRUE, size = 4)+
+  labs(y=expression(Log~('BPUE'[MPA]~'/'~'BPUE'[REF])), x=expression(Total~protected~area~(km)))+theme(legend.position="none")
+
+
+#Plot data by fishing pressure (landings/distance from port)
+port<-ggplot(totalrrs1, aes(x=(landings/Distance.km), y=meanRR)) +
+  #geom_line()+
+  scale_shape_manual(values=c(21,23))+
+  #scale_fill_manual(values=c("#b2182b", "#2166ac"), "Site")+
+  geom_smooth(method = "lm", formula = y ~ x, color="black", linetype="dashed",  fill="Gray80")+
+  #scale_color_manual(values=c("#b2182b", "#2166ac"))+
+  ylab('BPUE')+
+  geom_hline(yintercept=0, linetype="dashed")+  
+ # facet_wrap(~Area, ncol=4)+
+  theme(plot.title = element_text(size = 16, face = "bold"))+
+    theme(panel.border = element_rect(colour = "black", fill=NA, size=1))+
+  geom_point(data=totalrrs, aes(x=(landings/Distance.km), y=RR), size=2, color="Gray40")+
+   geom_errorbar(aes(ymax=upper, ymin=lower),width=0)+
+  geom_point(aes(shape=Cluster, fill=Area),size=3)+
+  scale_fill_manual(values=c("#000000","#053061","#2166ac", "#4393c3","#92c5de","#d1e5f0", "#f7f7f7","#fddbc7","#f4a582","#d6604d", "#b2182b", "#67001f"), "MPA")+
+  guides(fill=guide_legend(override.aes=list(shape=21)))+
+  labs(y=expression(Log~('BPUE'[MPA]~'/'~'BPUE'[REF])), x=expression(Fishing~Pressure~(Landings/Distance~from~nearest~port~(km))))+
+  stat_poly_eq(aes(label = paste(..eq.label.., ..rr.label.., sep = "~~~")), 
+               label.x.npc = "left", label.y.npc = "top",formula = formula, parse = TRUE, size = 4)+theme(legend.position="none")
+
+
+#Plot response ratios by MPA age
+age<-ggplot(totalrrs, aes(x=Age, y=RR)) + 
+  #geom_line()+
+  scale_shape_manual(values=c(21,23))+
+  #scale_fill_manual(values=c("#b2182b", "#2166ac"), "Site")+
+  geom_smooth(method='lm', color="black",  fill="Gray80")+
+  #scale_color_manual(values=c("#b2182b", "#2166ac"))+
+  ylab('BPUE')+
+  geom_hline(yintercept=0, linetype="dashed")+  
+  
+ # facet_wrap(~Area, ncol=4)+
+  theme(plot.title = element_text(size = 16, face = "bold"))+
+    theme(panel.border = element_rect(colour = "black", fill=NA, size=1))+
+  geom_point(data=totalrrs, aes(x=Age, y=RR), size=2, color="Gray40")+
+  # geom_errorbar(aes(ymax=upper, ymin=lower),width=0)+
+  geom_point(aes(shape=Cluster, fill=Area),size=3)+
+  scale_fill_manual(values=c("#000000","#053061","#2166ac", "#4393c3","#92c5de","#d1e5f0", "#f7f7f7","#fddbc7","#f4a582","#d6604d", "#b2182b", "#67001f"), "MPA")+
+  guides(fill=guide_legend(override.aes=list(shape=21)))+
+   stat_poly_eq(aes(label = paste(..eq.label.., ..rr.label.., sep = "~~~")), 
+               label.x.npc = "left", label.y.npc = "top",
+               formula = formula, parse = TRUE, size = 4)+
+  theme(legend.position="none")+
+  labs(y=expression(Log~('BPUE'[MPA]~'/'~'BPUE'[REF])), x=expression(MPA~age~(Yr)))
+
+
+library(gridExtra)
+grid.arrange(tarea, lat, port, age, ncol=2)
+
+```
+
+Conduct mixed effects models to determine which variables are most important in determining total fish BPUE across the network
+
+```{r}
+library(corrplot)
+library(lme4)
+library(afex)
+
+#First select variables of interest and then examine the correlations of the fixed effects
+totalrrsX<-totalrrs%>%
+  ungroup()%>%
+  select(Area, Year, Age, Cluster, Cluster.Area_km2, Paired.latitude, Distance.km, landings, RR)
+
+#Create index of fishin pressure
+totalrrsX$Fishing<-(totalrrsX$landings/totalrrsX$Distance.km)
+tot1<-totalrrsX%>%select(Year, Age, Cluster.Area_km2, Paired.latitude, Fishing)
+tot1x<-cor(tot1)
+
+#Examine correlation matrix
+corrplot(tot1x, method="number", type = 'upper')
+
+
+#Run most complex model of interest - All fixed effects + select ecologically relevant intetactions with a random effect of general location (MPA name). (Use maximum likelihood for model selection) 
+lmX2<-lmer(RR~Cluster.Area_km2+Paired.latitude+Fishing+Age+Paired.latitude:Age+Fishing:Paired.latitude+Fishing:Cluster.Area_km2+(1|Area),REML=F, data=totalrrsX, na.action = "na.fail")
+summary(lmX2)
+
+#Use the dredge function to examine all possible models with combinations of fixed effects. 
+modeloutput<-MuMIn::dredge(lmX2)
+#Export model output as a data fram
+modeloutput<-as.data.frame(modeloutput)
+#write.csv(modeloutput, "FullModelOutput.csv")
+
+#From dredge output identify best fit model and models with delta AICc < 2. Run with REML
+#Best fit model
+lm1REML<-lmer(RR~Cluster.Area_km2+Paired.latitude+Age+(1|Area),REML=T, data=totalrrsX)
+summary(lm1REML)
+
+#2nd model (delta AICc = 0.43)
+lm2REML<-lmer(RR~Cluster.Area_km2+Age+(1|Area),REML=T, data=totalrrsX)
+summary(lm2REML)
+
+#3rd model (delta AICc = 1.95)
+lm3REML<-lmer(RR~Cluster.Area_km2+Fishing+Age+(1|Area),REML=T, data=totalrrsX)
+summary(lm3REML)
+```
+
+Plot model outputs 
+
+```{r}
+library(MuMIn)
+library(visreg)
+
+#Use the visreg package to visualize the model outputs for each fixed effect (with others held constant at median value) with conditional fits (no error can be calculated)
+
+areap<-visreg(lm1REML, "Cluster.Area_km2", gg=T, ylab="Response ratio", points=list(size=3, shape=21),type="conditional", xlab="Area (km^2)")+theme_bw()
+agep<-visreg(lm1REML, "Age", gg=T, ylab="Response ratio", points=list(size=3, shape=21),type="conditional")+theme_bw()
+
+#Model 1: SI Figure 1
+cowplot::plot_grid(areap, agep)
+
+
+areap1<-visreg(lm2REML, "Cluster.Area_km2", gg=T, ylab="Response ratio", points=list(size=3, shape=21),type="conditional", xlab="Area (km^2)")+theme_bw()
+agep2<-visreg(lm2REML, "Age", gg=T, ylab="Response ratio", points=list(size=3, shape=21),type="conditional")+theme_bw()
+latp1<-visreg(lm2REML, "Paired.latitude", gg=T, ylab="Response ratio", xlab="Latitude", points=list(size=3, shape=21),type="conditional")+theme_bw()
+
+#Model 2 output: Figure 4 (colors added in affinity designer)
+cowplot::plot_grid(areap1, agep2, latp1, ncol=3)
+
+
+areap2<-visreg(lm3REML, "Cluster.Area_km2", gg=T, ylab="Response ratio", points=list(size=3, shape=21),type="conditional", xlab="Area (km^2)")+theme_bw()
+agep3<-visreg(lm3REML, "Age", gg=T, ylab="Response ratio", points=list(size=3, shape=21),type="conditional")+theme_bw()
+fishp1<-visreg(lm3REML, "Fishing", gg=T, ylab="Response ratio", points=list(size=3, shape=21),type="conditional")+theme_bw()
+
+#Model 3 output: SI Figure 3
+cowplot::plot_grid(areap2, agep3, fishp1, ncol=3)
+
+```
+
+Table output for models
+
+```{r}
+#Create table outputs for each model of best fit (1,2, & 3)
+library(sjPlot)
+library(sjmisc)
+library(effects)
+library(sjstats)
+
+#Model 1
+tab_model(lm1REML, show.re.var=TRUE, pred.labels = c("(Intercept)", "Area","Latitude", "MPA age"), dv.labels="Drivers of MPA efficacy")
+
+#Model 2
+tab_model(lm2REML)
+
+#Model 3
+tab_model(lm3REML)
+
+```
