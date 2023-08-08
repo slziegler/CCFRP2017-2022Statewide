@@ -1,6 +1,6 @@
 # CCFRP2017-2022Statewide
 
-##### GitHub repository containing data and code accompanying the CCFRP Statewide 2017-2022 manuscript (Ziegler et al. in prep)
+##### GitHub repository containing data and code accompanying the CCFRP Statewide 2017-2022 manuscript (Ziegler et al. in review)
 
 ## Title: Collaborative fisheries approach demonstrates that reserve size, age, location, and fishing effort determine efficacy of the world’s largest scientifically-designed network of marine protected areas
 
